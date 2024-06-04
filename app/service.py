@@ -1,9 +1,7 @@
 import logging
 import time
-from datetime import datetime
-from threading import Thread
 from enum import Enum
-
+from threading import Thread
 
 import torch
 import urllib3
