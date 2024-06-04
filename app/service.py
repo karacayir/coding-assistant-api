@@ -2,6 +2,8 @@ import logging
 import time
 from datetime import datetime
 from threading import Thread
+from enum import Enum
+
 
 import torch
 import urllib3
@@ -26,10 +28,6 @@ from transformers import (
     TextIteratorStreamer,
 )
 
-################################################################################
-# CONSTANTS
-################################################################################
-
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 model = None
@@ -37,10 +35,6 @@ tokenizer = None
 model_ready = False
 prompt_config = {}
 prompt_template = ""
-
-################################################################################
-# STATIC INITIALIZATION
-################################################################################
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # disable invalid ssl warnings
 logger = logging.getLogger(APP_NAME)
@@ -50,6 +44,35 @@ quantization_config = BitsAndBytesConfig(
     # bnb_4bit_quant_type="nf4",
     bnb_4bit_compute_dtype=torch.bfloat16,
 )
+
+
+class Role(Enum):
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    USER = "user"
+
+
+def fetch_parameters(content):
+    """
+    Fetches the parameters from the given content dictionary.
+
+    Parameters:
+        content (dict): A dictionary containing the parameters.
+
+    Returns:
+        tuple: A tuple containing the fetched parameters in the following order:
+            - stream (bool): The value of the 'stream' parameter. Defaults to STREAM_DEFAULT.
+            - max_new_tokens (int): The value of the 'max_tokens' parameter. Defaults to NEW_TOKENS_DEFAULT.
+            - temperature (float): The value of the 'temperature' parameter. Defaults to TEMPERATURE_DEFAULT.
+            - top_p (float): The value of the 'top_p' parameter. Defaults to TOP_P_DEFAULT.
+            - top_k (int): The value of the 'top_k' parameter. Defaults to TOP_K_DEFAULT.
+    """
+    stream = content.get("stream", STREAM_DEFAULT)
+    max_new_tokens = content.get("max_tokens", NEW_TOKENS_DEFAULT)
+    temperature = content.get("temperature", TEMPERATURE_DEFAULT)
+    top_p = content.get("top_p", TOP_P_DEFAULT)
+    top_k = content.get("top_k", TOP_K_DEFAULT)
+    return stream, max_new_tokens, temperature, top_p, top_k
 
 
 def check_for_new_model():
@@ -96,11 +119,7 @@ def get_generic_message(message: str, stream: bool):
 
 
 def completions_response(content):
-    stream = content.get("stream", STREAM_DEFAULT)
-    max_new_tokens = content.get("max_tokens", NEW_TOKENS_DEFAULT)
-    temperature = content.get("temperature", TEMPERATURE_DEFAULT)
-    top_p = content.get("top_p", TOP_P_DEFAULT)
-    top_k = content.get("top_k", TOP_K_DEFAULT)
+    stream, max_new_tokens, temperature, top_p, top_k = fetch_parameters(content)
 
     # If model is not loaded in test environments, return a place holder.
     if not model_ready or not MODEL_LOAD:
@@ -121,11 +140,7 @@ def completions_response(content):
 
 def chat_completions_response(content):
     messages = content["messages"]
-    stream = content.get("stream", STREAM_DEFAULT)
-    max_new_tokens = content.get("max_tokens", NEW_TOKENS_DEFAULT)
-    temperature = content.get("temperature", TEMPERATURE_DEFAULT)
-    top_p = content.get("top_p", TOP_P_DEFAULT)
-    top_k = content.get("top_k", TOP_K_DEFAULT)
+    stream, max_new_tokens, temperature, top_p, top_k = fetch_parameters(content)
 
     # If model is not loaded in test environments, return a place holder.
     if not model_ready or not MODEL_LOAD:
@@ -133,8 +148,8 @@ def chat_completions_response(content):
         return get_generic_message(WAIT_RESPONSE, stream=stream)
 
     # Process messages
-    if messages[0]["role"] == "assistant":
-        messages[0]["role"] = "system"
+    if messages[0]["role"] == Role.ASSISTANT.value:
+        messages[0]["role"] = Role.SYSTEM.value
 
     last_role = None
     remove_elements = []
@@ -164,7 +179,7 @@ def get_prompt(messages: list[dict], system_prompt: str) -> str:
     do_strip = False
     for message in messages:
         messageContent = message["content"].strip() if do_strip else message["content"]
-        if message["role"] == "user":
+        if message["role"] == Role.USER.value:
             texts.append(f"### User Message\n{messageContent}\n\n")
         else:
             texts.append(f"### Assistant Response\n{messageContent}\n\n")
@@ -224,7 +239,7 @@ def run_chat_completion(
         # Since generate works in a thread, this function is used to catch exceptions raised from the thread, aka generation errors
         try:
             return model.generate(**generation_kwargs)
-        except Exception as ex:  # burda skip prompt kısmı çalışmıyo nedense
+        except Exception as ex:
             streamer.text_queue.put(ex)  # if an exception occurs, it is added to the stream queue to be handled later
 
     start = time.time()
